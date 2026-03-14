@@ -17,6 +17,7 @@ from ingest.loader import fetch_dados_reais, fetch_ibge_municipios, generate_sam
 from ingest.private_incentives import fetch_incentivos_privados, SH4_AGRO
 from model.icae_model import ICAEModel, WeightConfig
 from index.exporter import build_ranking, build_municipio_summary
+from graph.graph_builder import build_graph, graph_summary, top_risk_neighbors
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,17 +31,22 @@ _cache: dict = {
     "carregando": False, "erro": None,
 }
 _ibge_cache: Optional[pd.DataFrame] = None
+_grafo_cache: dict = {"G": None, "ultima_atualizacao": None}
+_atualizar_timestamps: list = []  # rate-limit: máx 3 req/min
 
 def _carregar():
     global _ibge_cache
     _cache["carregando"] = True
     _cache["erro"] = None
     try:
-        raw = fetch_dados_reais(ano_credito=2022, ano_desmat_inicio=2021, ano_desmat_fim=2022, top_municipios=300)
+        raw = fetch_dados_reais(ano_credito=2022, ano_desmat_inicio=2021, ano_desmat_fim=2022)
         _cache["df"] = ICAEModel().fit_transform(raw)
         _cache["fonte"] = "real" if "delta_km2" in raw.columns and raw["delta_km2"].sum() > 0 else "demo"
         _cache["ultima_atualizacao"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _cache["erro"] = None
+        # Reconstrói grafo com dados novos
+        _grafo_cache["G"] = build_graph(_cache["df"])
+        _grafo_cache["ultima_atualizacao"] = _cache["ultima_atualizacao"]
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
@@ -100,9 +106,15 @@ def status():
 @app.post("/atualizar")
 def atualizar(bt: BackgroundTasks):
     if _cache["carregando"]:
-        return {"mensagem":"Já está carregando. Use /status para acompanhar."}
+        return {"mensagem": "Já está carregando. Use /status para acompanhar."}
+    # Rate-limit: máx 3 requisições por minuto
+    agora = time.time()
+    _atualizar_timestamps[:] = [t for t in _atualizar_timestamps if agora - t < 60]
+    if len(_atualizar_timestamps) >= 3:
+        raise HTTPException(429, "Muitas requisições. Máx 3 recargas por minuto.")
+    _atualizar_timestamps.append(agora)
     bt.add_task(_carregar)
-    return {"mensagem":"Recarga iniciada. Use /status para acompanhar."}
+    return {"mensagem": "Recarga iniciada. Use /status para acompanhar."}
 
 
 @app.get("/formula")
@@ -143,7 +155,7 @@ def ranking(
         raise HTTPException(404, "Nenhum resultado com esses filtros.")
     r = build_ranking(df, top_n=top)
     cols = [c for c in ["entity_id","nome","municipio","uf","bioma","regiao","icae","risk","credito_norm","rank"] if c in r.columns]
-    return r[cols].to_dict("records")
+    return _add_proxy_flag(r[cols].to_dict("records"))
 
 
 @app.get("/municipios")
@@ -207,7 +219,7 @@ def mapa(bioma: Optional[str] = Query(None)):
     else:
         result["severidade"] = "desconhecido"
 
-    return result.to_dict("records")
+    return _add_proxy_flag(result.to_dict("records"))
 
 
 @app.get("/biomas")
@@ -268,6 +280,55 @@ def simular(body: WeightInput):
         "ranking":    rank[cols].to_dict("records"),
         "fonte":      _cache["fonte"],
     }
+
+
+# ── Grafo relacional ─────────────────────────────────────────────────────────
+
+def _get_grafo():
+    if _grafo_cache["G"] is None:
+        _grafo_cache["G"] = build_graph(get_df())
+        _grafo_cache["ultima_atualizacao"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return _grafo_cache["G"]
+
+
+@app.get("/grafo")
+def grafo():
+    """
+    Retorna métricas descritivas do grafo relacional ICAE.
+    Nós: Entidades, Municípios, Créditos, Multas.
+    Arestas: recebeu, esta_em, foi_autuado, similar_icae.
+    """
+    G = _get_grafo()
+    return {
+        **graph_summary(G),
+        "ultima_atualizacao": _grafo_cache["ultima_atualizacao"],
+    }
+
+
+@app.get("/grafo/{entity_id}/vizinhos")
+def grafo_vizinhos(entity_id: str, top: int = Query(5, ge=1, le=50)):
+    """
+    Retorna os N vizinhos de maior risco ambiental de uma entidade no grafo.
+    Útil para análise de contágio de risco e identificação de clusters.
+    """
+    G = _get_grafo()
+    if entity_id not in G:
+        raise HTTPException(404, f"Entidade '{entity_id}' não encontrada no grafo.")
+    vizinhos = top_risk_neighbors(G, entity_id, n=top)
+    return {"entity_id": entity_id, "vizinhos_alto_risco": vizinhos}
+
+
+# ── Proxy flag — campos estimados vs. dados reais ────────────────────────────
+
+# Campos calculados via proxy até integração com IBAMA/SINAFLOR
+_PROXY_FIELDS = {"multas", "infracoes", "embargo"}
+
+def _add_proxy_flag(records: list[dict]) -> list[dict]:
+    """Adiciona is_proxy=True nos registros que usam dados estimados."""
+    for r in records:
+        r["is_proxy"] = any(r.get(f, 0) != 0 for f in _PROXY_FIELDS)
+        r["campos_proxy"] = list(_PROXY_FIELDS)
+    return records
 
 
 # ── Cache de incentivos privados ─────────────────────────────────────────────

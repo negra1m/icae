@@ -138,7 +138,13 @@ class ICAEModel:
         result["icae"] = (1 - result["risk"]) * (1 - result["credito_norm"])
 
         # Garantia matemática: ICAE ∈ [0, 1]
-        assert result["icae"].between(0, 1).all(), "Violação: ICAE fora de [0,1]"
+        # (assert desativado com python -O; usar raise explícito — vide PROVAS_MATEMATICAS §5)
+        if not result["icae"].between(0, 1).all():
+            violacoes = result[~result["icae"].between(0, 1)][["entity_id", "icae"]]
+            raise ValueError(
+                f"Violação matemática: ICAE fora de [0,1] em {len(violacoes)} linha(s).\n"
+                f"{violacoes.to_string()}"
+            )
 
         logger.info(
             f"ICAE calculado. Média={result['icae'].mean():.4f} "

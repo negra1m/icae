@@ -763,6 +763,14 @@ export default function App() {
 
       <main style={{ padding:"28px 32px", maxWidth:1440, margin:"0 auto" }}>
         {error && <div style={{ background:C.warnDim, border:`1px solid ${C.warn}`, borderRadius:10, padding:"12px 16px", marginBottom:20, color:C.warn, fontSize:13 }}>⚠️ {error}</div>}
+        {status?.carregando && !loading && (
+          <div style={{ background:"#0a1a2a", border:`1px solid #00b8d440`, borderRadius:10, padding:"10px 16px", marginBottom:16, color:"#00b8d4", fontSize:12, display:"flex", alignItems:"center", gap:10 }}>
+            <span className="pulse">⏳</span>
+            {lang === "pt"
+              ? "Sincronizando dados reais com SICOR/BCB e PRODES/INPE… Isso pode levar 2–5 minutos. Os dados exibidos são temporários."
+              : "Syncing real data from SICOR/BCB and PRODES/INPE… This may take 2–5 minutes. Displayed data is temporary."}
+          </div>
+        )}
         {loading && <div style={{ textAlign:"center", padding:80, color:C.textDim, fontFamily:"DM Mono" }}><div className="pulse">{T.mapLoading}</div></div>}
 
         {!loading && !error && (
@@ -1021,6 +1029,16 @@ export default function App() {
 
                 {privados.length > 0 && (
                   <div style={{ display:"grid", gap:16 }}>
+
+                    {/* Aviso dados demo */}
+                    {privados[0]?.codigo_ibge && privados[0].codigo_ibge > 1100000 && privados[0].codigo_ibge < 5300000 &&
+                     privados.every(p => p.fonte === undefined) && (
+                      <div style={{ background:"#2a1f00", border:`1px solid ${C.warn}`, borderRadius:10, padding:"10px 16px", color:C.warn, fontSize:12, display:"flex", alignItems:"center", gap:8 }}>
+                        ⚠️ {lang === "pt"
+                          ? "Exibindo dados demo — integração BNDES/Comex Stat ainda em validação. Os valores não refletem dados reais."
+                          : "Showing demo data — BNDES/Comex Stat integration still under validation. Values do not reflect real data."}
+                      </div>
+                    )}
 
                     {/* KPIs */}
                     <div style={{ display:"flex", gap:14, flexWrap:"wrap" }}>

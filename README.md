@@ -127,12 +127,22 @@ docker compose up --build
 
 ```
 backend/
-  ingest/loader.py      ← ETL: SICOR + PRODES + IBGE (nacional)
-  model/icae_model.py   ← fórmulas ΔD, R, Risk e ICAE
-  index/exporter.py     ← ranking e exportação
-  api/main.py           ← REST API (FastAPI)
+  ingest/
+    loader.py             ← ETL: SICOR + PRODES + IBGE (todos 5.570 municípios)
+    private_incentives.py ← BNDES agro + Comex Stat por município
+  model/
+    icae_model.py         ← fórmulas ΔD, R, Risk e ICAE
+    validation.py         ← análise de sensibilidade, bootstrap, Monte Carlo
+  graph/
+    graph_builder.py      ← grafo relacional (entidades, municípios, créditos)
+  index/exporter.py       ← ranking e exportação CSV/JSON com hash SHA-256
+  api/main.py             ← REST API (FastAPI)
+  dashboard/app.py        ← dashboard interativo (Streamlit) — porta 8501
+  docs/
+    PROVAS_MATEMATICAS.md ← provas formais das propriedades dos índices
+  pipeline.py             ← orquestra ETL → modelo → grafo → exportação (CLI)
 frontend/
-  src/App.jsx           ← dashboard React com mapa do Brasil
+  src/App.jsx             ← dashboard React bilíngue (pt-BR / en)
 ```
 
 ---
@@ -141,22 +151,39 @@ frontend/
 
 | Endpoint | Descrição |
 |----------|-----------|
-| `GET /ranking?uf=PA&bioma=Amazônia&top=50` | Ranking filtrado |
+| `GET /ranking?uf=PA&bioma=Amazônia&top=50` | Ranking filtrado — inclui `is_proxy` |
 | `GET /municipios` | Resumo por município |
-| `GET /mapa` | Dados para o mapa choropleth |
+| `GET /mapa` | Dados para o mapa choropleth com `severidade` e `is_proxy` |
 | `GET /biomas` | Estatísticas por bioma |
 | `GET /regioes` | Estatísticas por região |
 | `GET /status` | Estado do cache e fontes |
-| `POST /atualizar` | Recarrega dados reais em background |
+| `GET /grafo` | Métricas do grafo relacional (nós, arestas, densidade) |
+| `GET /grafo/{id}/vizinhos` | Vizinhos de maior risco de uma entidade |
+| `POST /atualizar` | Recarrega dados reais em background (rate-limit: 3/min) |
 | `POST /simular` | Recalcula com pesos customizados (α1…α4) |
+| `GET /incentivos-privados` | BNDES agro + Comex Stat por município |
+| `GET /incentivos-privados/ranking-cruzado` | Casos mais críticos (fluxo × risco) |
+| `POST /incentivos-privados/atualizar` | Recarrega dados privados em background |
+
+> Campos estimados por proxy (multas, infracoes, embargo) são sinalizados com `is_proxy: true`
+> até integração com IBAMA/SINAFLOR.
+
+---
+
+## Testes
+
+```bash
+pytest backend/tests/
+```
 
 ---
 
 ## Limitações conhecidas
 
-- **Multas/embargo individuais**: proxy via delta de desmatamento até integração com IBAMA/SINAFLOR (não há API pública disponível)
+- **Multas/embargo individuais**: proxy via delta de desmatamento até integração com IBAMA/SINAFLOR (não há API pública disponível) — sinalizado com `is_proxy: true` nas respostas
 - **Biomas novos** (Pampa, Pantanal, Caatinga, Mata Atlântica): PRODES só tem série histórica desde 2022 para esses biomas
-- **Carga inicial**: ~2–5 minutos para puxar dados de todos os biomas; enquanto isso a API serve dados demo
+- **Carga inicial**: ~2–5 minutos para puxar dados de todos os biomas; a UI exibe banner de progresso enquanto sincroniza
+- **BNDES/Comex Stat**: integração com dados privados ainda em validação; a aba exibe aviso quando serve dados demo
 
 ---
 

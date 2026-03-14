@@ -43,6 +43,16 @@ ICAE_i  = (1 − Risk_i) · (1 − Cr_i)
 - `ICAE = 1` → máxima coerência
 - `ICAE = 0` → incoerência máxima
 
+As provas formais de que `ICAE ∈ [0,1]`, monotonicidade, invariância por reescala e necessidade de `Σαk = 1` estão em [docs/PROVAS_MATEMATICAS.md](docs/PROVAS_MATEMATICAS.md).
+
+## Testes
+
+```bash
+pytest tests/
+```
+
+Cobre: normalização, WeightConfig, modelo ICAE, exportação, grafo e todas as propriedades formais das [Provas Matemáticas](docs/PROVAS_MATEMATICAS.md) (§2 caso degenerado, §6 casos extremos, §7 invariância, §8 monotonicidade, §9 pesos unitários).
+
 ## Princípios
 
 1. Todo cálculo é reproduzível

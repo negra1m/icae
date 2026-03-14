@@ -273,14 +273,15 @@ def fetch_dados_reais(
     ano_desmat_inicio: int = 2021,
     ano_desmat_fim: int = 2022,
     uf: Optional[str] = None,
-    top_municipios: int = 200,
 ) -> pd.DataFrame:
     """
     Pipeline completo:
-      1. IBGE   → tabela mestre de municípios (código + coords)
+      1. IBGE   → tabela mestre de municípios (código + coords) — todos os 5.570
       2. SICOR  → crédito rural por município
       3. PRODES → desmatamento todos biomas por município
-      4. Merge  → une por código IBGE (preferencial) ou nome normalizado
+      4. Merge  → outer join por código IBGE (preferencial) ou nome normalizado
+                  Municípios sem crédito recebem credito=0 (Cr_norm=0 → ICAE=(1-Risk))
+                  Municípios sem desmatamento recebem delta_km2=0, desmat_antes=0
       5. Schema → converte para formato ICAEModel
     """
     logger.info("=== PIPELINE DADOS REAIS (NACIONAL) ===")
@@ -349,26 +350,36 @@ def fetch_dados_reais(
     has_ibge_d = "codigo_ibge" in df_desmat.columns and df_desmat["codigo_ibge"].gt(0).any()
 
     if has_ibge_c and has_ibge_d:
-        df = df_cred.merge(df_desmat, on="codigo_ibge", how="inner", suffixes=("_c","_d"))
-        logger.info(f"Merge por código IBGE: {len(df)} municípios")
+        df = df_cred.merge(df_desmat, on="codigo_ibge", how="outer", suffixes=("_c","_d"))
+        logger.info(f"Merge (outer) por código IBGE: {len(df)} municípios")
     else:
         # Fallback: merge por nome normalizado
-        df = df_cred.merge(df_desmat, on="_key", how="inner", suffixes=("_c","_d"))
-        logger.info(f"Merge por nome: {len(df)} municípios")
+        df = df_cred.merge(df_desmat, on="_key", how="outer", suffixes=("_c","_d"))
+        logger.info(f"Merge (outer) por nome: {len(df)} municípios")
 
     if df.empty:
         logger.warning("Merge sem matches → join por ranking de crédito/desmatamento")
-        df = _join_ranking(df_cred, df_desmat, top_municipios)
+        df = _join_ranking(df_cred, df_desmat, len(df_cred))
+
+    # Preenche zeros para municípios sem crédito ou sem desmatamento registrado
+    # Sem crédito: Cr_norm = 0 → ICAE = (1 − Risk), correto matematicamente (§6 PROVAS)
+    # Sem desmatamento: ΔD = 0, não penaliza (§2 PROVAS)
+    if "credito_total_reais" in df.columns:
+        df["credito_total_reais"] = df["credito_total_reais"].fillna(0)
+    for col in ["area_km2_antes","area_km2_depois","delta_km2","delta_pct"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
 
     # Filtra por UF se solicitado
     uf_col = next((c for c in ["uf_c","uf","uf_ibge"] if c in df.columns), None)
     if uf and uf_col:
         df = df[df[uf_col].str.upper() == uf.upper()]
 
-    # Seleciona os que mais receberam crédito (mais relevante para o ICAE)
-    df = df.nlargest(min(top_municipios, len(df)), "credito_total_reais").reset_index(drop=True)
-
     result = _schema_icae(df)
+
+    # Log de cobertura nacional
+    cobertura = len(result)
+    logger.info(f"Cobertura: {cobertura}/5570 municípios ({cobertura/5570*100:.1f}%)")
 
     # ── Enriquece com incentivos privados (BNDES + Comex Stat) ──
     result = _enriquecer_incentivos_privados(result, ano_credito)
